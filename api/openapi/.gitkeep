@@ -1,0 +1,16 @@
+# OpenAPI Specifications
+
+Store OpenAPI/Swagger specification files here.
+
+## Files
+- `spec.yaml` - Main OpenAPI specification
+- `spec.json` - JSON format (auto-generated)
+
+## Generating SDK
+
+From the inmoney project root:
+```bash
+npm run generate-api
+```
+
+This requires the API server running on port 8787.

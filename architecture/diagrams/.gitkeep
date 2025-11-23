@@ -1,0 +1,7 @@
+# Diagrams Directory
+
+Store architecture diagrams here:
+- `.svg` - Scalable vector graphics (preferred)
+- `.png` - Raster images
+- `.drawio` - Draw.io source files
+- `.mmd` - Mermaid source files
