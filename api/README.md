@@ -33,15 +33,17 @@ See [Authentication](./authentication.md) for details.
 | Category | Prefix | Endpoints | Description |
 |----------|--------|-----------|-------------|
 | **Payment** | `/pay/*` | 5 | Stripe checkout, billing |
-| **Business Logic** | Various | 15 | Core features |
+| **Business Logic** | Various | 17 | Core features |
 | **Technical Indicators** | `/indicator/*` | 13 | SMA, EMA, RSI, MACD, etc. |
-| **Insights** | `/insights/*` | 4 | Options analytics |
+| **Insights** | `/insights/*` | 8 | Options analytics |
+| **Search** | `/search/*` | 2 | Symbol and options search |
+| **User** | `/user/*` | 1 | User-specific data |
 | **AI/LLM** | `/llama/*` | 2 | AI-powered analysis |
 | **Realtime** | `/realtime/*` | 6 | WebSocket control |
 | **Rate-Limited** | `/ratelimited/*` | 17 | External market data |
 | **Helpdesk** | `/helpdesk/*` | 4 | GitHub issues |
 
-**Total: 66 endpoints**
+**Total: 75 endpoints**
 
 ---
 
@@ -94,10 +96,25 @@ GET  /indicator/obv/:symbol
 
 ### Insights Routes
 ```
-GET /insights/options/top-symbols-traded-last-x-days
-GET /insights/options/sentiment-trend-by-symbol/:symbol
-GET /insights/options/net-bullish-flows/:symbol
-GET /insights/options/popular-price-lines/:symbol
+GET  /insights/options/top-symbols-traded-last-x-days
+GET  /insights/options/sentiment-trend-by-symbol/:symbol
+GET  /insights/options/net-bullish-flows/:symbol
+GET  /insights/options/popular-price-lines/:symbol
+GET  /insights/options/hot-expirations/:symbol
+GET  /insights/options/events/filtered
+GET  /insights/options/top-activity
+POST /options/events/resolve-filter
+```
+
+### Search Routes
+```
+GET /search
+GET /search/options
+```
+
+### User Routes
+```
+GET /user/watchlist/enriched
 ```
 
 ### AI/LLM Routes
@@ -240,6 +257,126 @@ Get unusual options leaderboard.
     "put_volume": 20000,
     "bullish_score": 0.6
   }]
+}
+```
+
+### GET `/search`
+Server-side full-text search for symbols with relevance ranking.
+
+**Query Parameters**:
+- `q` (required): Search query
+- `type` (optional): Filter by type (`all`, `Stock`, `ETF`)
+- `limit` (optional): Max results (default: 20)
+
+**Response**:
+```json
+{
+  "results": [{
+    "symbol": "AAPL",
+    "name": "Apple Inc",
+    "type": "Stock",
+    "exchange": "NASDAQ",
+    "sector": "Technology",
+    "industry": "Consumer Electronics",
+    "score": 100
+  }],
+  "query": "AAPL",
+  "total": 1,
+  "took_ms": 12
+}
+```
+
+### GET `/insights/options/events/filtered`
+Get option events filtered by standard deviation threshold.
+
+**Query Parameters**:
+- `symbol` (optional): Filter to specific symbol
+- `days_back` (optional): Days to look back (default: 7)
+- `std_multiplier` (optional): Std deviation multiplier -3 to 3 (default: 1)
+- `group_by` (optional): Group results (`time`, `symbol`, `none`)
+- `include_session_markers` (optional): Add session boundary markers
+- `dte` (optional): Days to expiration filter
+
+**Response**:
+```json
+{
+  "events": [{
+    "id": "...",
+    "symbol": "AAPL",
+    "event_type": "BuyCall",
+    "net_premium_transacted": 150000,
+    "important": true,
+    "dte_category": "short_term"
+  }],
+  "metadata": {
+    "total_before_filter": 500,
+    "total_after_filter": 50,
+    "threshold": 75000,
+    "mean": 50000,
+    "std": 25000,
+    "std_multiplier": 1
+  }
+}
+```
+
+### GET `/insights/options/top-activity`
+Get top options activity with computed importance and sentiment.
+
+**Query Parameters**:
+- `symbol` (optional): Filter to specific symbol
+- `days_back` (optional): Days to look back (default: 1)
+- `min_premium` (optional): Minimum premium threshold (default: 50000)
+- `importance_filter` (optional): Filter by importance (`all`, `high`, `medium`)
+
+**Response**:
+```json
+{
+  "activities": [{
+    "symbol": "AAPL",
+    "event_type_display": "Buy Call",
+    "bullish": true,
+    "moneyness": "ITM",
+    "importance": "high",
+    "vol_oi_ratio": 2.5,
+    "net_premium_transacted": 250000
+  }],
+  "thresholds": {
+    "mean": 75000,
+    "std_0": 75000,
+    "std_1": 125000,
+    "std_2": 175000
+  },
+  "summary": {
+    "total": 50,
+    "high_importance": 12,
+    "bullish_count": 30,
+    "bearish_count": 20
+  }
+}
+```
+
+### GET `/user/watchlist/enriched`
+Get user's watchlist with real-time prices and event counts.
+
+**Query Parameters**:
+- `days_back` (optional): Days for event counts (default: 1)
+
+**Response**:
+```json
+{
+  "items": [{
+    "symbol": "AAPL",
+    "name": "Apple Inc",
+    "current_price": 185.50,
+    "previous_close": 184.25,
+    "change": 1.25,
+    "change_pct": 0.68,
+    "in_green": true,
+    "event_count": 15,
+    "volume": 45000000
+  }],
+  "total_events_today": 150,
+  "as_of": "2024-01-15T16:00:00Z"
 }
 ```
 
