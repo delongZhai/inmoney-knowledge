@@ -1,34 +1,77 @@
 # Current Roadmap
 
 **Period**: Q4 2024 - Q1 2025
-**Theme**: AI-Powered Intelligence & Simplified UX
+**Theme**: Intelligent Flow Analysis & Conversational Interface
 
 ---
 
 ## Vision
 
-Transform InMoney from a data platform into an **AI-powered trading assistant** that helps users understand complex options data through natural conversation and intelligent recommendations.
+Transform InMoney from a data platform into an **AI-powered trading assistant** that automatically detects sophisticated trading strategies from options flow, enables natural language interaction, and delivers AI-augmented insights across all platforms.
 
 **Key Principles**:
-1. **Simplify complexity** - Make options trading accessible to more users
-2. **AI-first interactions** - Let users ask questions instead of clicking through menus
-3. **Contextual intelligence** - Surface relevant insights automatically
-4. **Open ecosystem** - Enable AI agents to access our data via MCP
+1. **Intelligent detection** - Automatically identify multi-leg strategies and market sentiment from raw flow
+2. **Conversational interface** - Users interact through chat, not menus
+3. **API-first architecture** - All computation server-side, enabling agents and mobile
+4. **Cross-platform consistency** - Same experience on web, mobile, and AI assistants
 
 ---
 
 ## Goals
 
-- [ ] Enable AI assistants to query InMoney data via MCP (Model Context Protocol)
-- [ ] Implement RAG for intelligent Q&A over user's portfolio and market data
-- [ ] Simplify core workflows to reduce learning curve
-- [ ] Improve onboarding for new users
+- [ ] Detect multi-leg options strategies from flow data automatically
+- [ ] Enable conversational queries AND actions via chat interface
+- [ ] Migrate UI computations to API for agent/mobile consumption
+- [ ] Document mobile strategy for future native iOS/Android apps
 
 ---
 
 ## Strategic Initiatives
 
-### 1. MCP Server Implementation
+### 1. Multi-Leg Strategy Detection
+**Priority**: P0 (Critical)
+**Status**: Planning
+**Effort**: L
+
+Automatically identify options strategies from raw flow data by clustering related trades within a **rolling 5-minute window**.
+
+**Why**: Users currently see individual trades but miss the bigger picture. A synthetic long (150x call + 150x short put) looks like two unrelated trades but represents a single directional bet.
+
+**Detectable Patterns**:
+
+| Pattern | Detection Logic |
+|---------|-----------------|
+| Synthetic Long | Long call + short put, same strike/exp, similar size |
+| Synthetic Short | Short call + long put, same strike/exp, similar size |
+| Bull Call Spread | Long lower strike call + short higher strike call |
+| Bear Put Spread | Long higher strike put + short lower strike put |
+| Straddle | Long call + long put, same strike/exp |
+| Strangle | Long OTM call + long OTM put, same exp |
+| Iron Condor | Bull put spread + bear call spread |
+| Butterfly | 3-leg structure with middle strike 2x quantity |
+
+**Enrichment Layer**:
+- Inferred direction (bullish / bearish / neutral / volatility)
+- Conviction score (premium-weighted, normalized by vol/OI)
+- Combined position Greeks and max profit/loss profile
+
+**Tasks**:
+- [ ] Design clustering algorithm with 5-minute rolling window
+- [ ] Define pattern templates for each strategy type
+- [ ] Implement tolerance parameters (strike proximity, size matching)
+- [ ] Build enrichment layer (direction, conviction, Greeks)
+- [ ] Create API endpoint for strategy-annotated flow
+- [ ] Add strategy detection to real-time flow feed
+- [ ] Update frontend to display detected strategies
+
+**Success Criteria**:
+- Correctly identify >90% of multi-leg strategies in historical data
+- Real-time detection latency <1 second
+- Users can filter flow by detected strategy type
+
+---
+
+### 2. MCP Server Implementation
 **Priority**: P0 (Critical)
 **Status**: Planning
 **Effort**: L
@@ -59,46 +102,94 @@ Build an MCP (Model Context Protocol) server that exposes InMoney data and capab
 
 ---
 
-### 2. RAG-Powered Q&A System
+### 3. Conversational Research Interface
 **Priority**: P0 (Critical)
 **Status**: Planning
 **Effort**: XL
 
-Implement Retrieval-Augmented Generation to answer user questions about their data and market conditions.
+Chat interface supporting both **read operations** (queries, analysis) and **write operations** (watchlist management, alerts, actions).
 
-**Why**: Users shouldn't need to know which chart or filter to use. They should just ask.
+**Why**: Users shouldn't need to know which chart or filter to use. They should just ask—and act.
 
-**Use Cases**:
-- "What stocks in my watchlist have unusual put activity?"
-- "Summarize the options flow for my portfolio today"
-- "What are the highest conviction trades this week?"
-- "Explain why AAPL calls are up 200% today"
-- "What strategies would work for TSLA before earnings?"
+**Query Capabilities**:
+```
+"Show me bullish flow on AAPL this week"
+"Find synthetic longs opened today with premium > $500K"
+"What's unusual in my watchlist?"
+"Compare NVDA flow sentiment to last earnings"
+```
 
-**Components**:
-- [ ] Vector store for market data embeddings
-- [ ] Knowledge base of options concepts (from our docs)
-- [ ] Query routing (portfolio vs. market vs. educational)
-- [ ] Response generation with citations
-- [ ] Conversation memory for follow-ups
+**Action Capabilities**:
+```
+"Add TSLA to my watchlist"
+"Create a new watchlist called 'Earnings Plays'"
+"Alert me when there's unusual put activity on SPY"
+"Remove META from Tech Stocks"
+```
+
+**Analysis Capabilities**:
+```
+"Explain why this flow cluster is significant"
+"Summarize today's market sentiment"
+"What does this iron condor setup imply about expected move?"
+```
+
+**Architecture**:
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Chat UI   │────▶│    Agent    │────▶│  Compute    │
+│ (Web/Mobile)│◀────│ Orchestrator│◀────│    API      │
+└─────────────┘     └─────────────┘     └─────────────┘
+                           │
+                           ▼
+                    ┌─────────────┐
+                    │     LLM     │
+                    │  (Reasoning)│
+                    └─────────────┘
+```
+
+**Agent Function Definitions**:
+
+| Function | Type | Description |
+|----------|------|-------------|
+| `searchFlow` | read | Query options flow with filters |
+| `detectStrategies` | read | Identify multi-leg patterns in flow |
+| `analyzeSymbol` | read | Get sentiment/flow summary for ticker |
+| `getWatchlist` | read | Retrieve user's watchlists |
+| `addToWatchlist` | write | Add symbol to watchlist |
+| `removeFromWatchlist` | write | Remove symbol from watchlist |
+| `createWatchlist` | write | Create new watchlist |
+| `deleteWatchlist` | write | Delete a watchlist |
+| `createAlert` | write | Set up flow/price alert |
+| `explainFlow` | read | Generate analysis of flow pattern |
+
+**API Migration Checklist** (move from UI to API):
+- [ ] Strategy P/L profile calculation
+- [ ] Greeks aggregation
+- [ ] Flow filtering & sorting
+- [ ] Historical flow queries
+- [ ] Strategy pattern detection (Initiative 1)
 
 **Tasks**:
-- [ ] Choose vector database (Vectorize, Pinecone, etc.)
-- [ ] Design embedding strategy for time-series data
-- [ ] Build ingestion pipeline for real-time data
-- [ ] Implement retrieval logic
-- [ ] Create prompt templates for different query types
-- [ ] Build chat UI component
+- [ ] Design agent orchestration framework (in-house)
+- [ ] Define function schemas for all read/write operations
+- [ ] Migrate compute logic from frontend to API endpoints
+- [ ] Implement LLM integration layer
+- [ ] Build chat UI component (web)
+- [ ] Add conversation memory / context management
+- [ ] Implement action confirmation flow (for write operations)
 - [ ] Add feedback mechanism (thumbs up/down)
 
 **Success Criteria**:
-- Users can get answers without navigating to specific pages
-- Answers include relevant charts/data visualizations
-- System learns from user feedback
+- Users can query data without navigating UI
+- Users can execute actions (add to watchlist, create alerts) via chat
+- Agent correctly routes between read/write operations
+- Response latency <3 seconds for queries, <1 second for actions
 
 ---
 
-### 3. Simplified UX & Onboarding
+### 4. Simplified UX & Onboarding
 **Priority**: P1 (High)
 **Status**: Planning
 **Effort**: L
@@ -109,19 +200,19 @@ Reduce complexity for new users while maintaining power-user features.
 
 **Focus Areas**:
 
-#### 3a. Guided Onboarding Flow
+#### 4a. Guided Onboarding Flow
 - [ ] Interactive tutorial for first-time users
 - [ ] Explain core concepts in context
 - [ ] Pre-built watchlist templates (Tech, Meme stocks, etc.)
 - [ ] "Quick start" for common tasks
 
-#### 3b. Simplified Default Views
+#### 4b. Simplified Default Views
 - [ ] Smart defaults for filters (don't show 15 options upfront)
 - [ ] Progressive disclosure (basic → advanced)
 - [ ] Contextual tooltips for terminology
 - [ ] "Explain this" button on complex data
 
-#### 3c. AI-Assisted Navigation
+#### 4c. AI-Assisted Navigation
 - [ ] Command palette (Cmd+K) with natural language
 - [ ] "Take me to..." voice/text commands
 - [ ] Suggested next actions based on context
@@ -133,7 +224,7 @@ Reduce complexity for new users while maintaining power-user features.
 
 ---
 
-### 4. API & Developer Experience
+### 5. API & Developer Experience
 **Priority**: P2 (Medium)
 **Status**: Planning
 **Effort**: M
@@ -153,8 +244,9 @@ Prepare infrastructure for AI integrations and potential public API.
 
 | Risk | Mitigation |
 |------|------------|
+| Strategy detection accuracy | Start with simple patterns, add complex ones iteratively |
+| Agent action safety | Require confirmation for destructive actions |
 | MCP is new protocol, may evolve | Start with core features, iterate |
-| RAG quality depends on data structure | Invest in good embedding strategy |
 | AI costs could be high | Tier AI features, cache responses |
 | User adoption of chat interface | Keep traditional UI, chat is additive |
 
@@ -162,38 +254,44 @@ Prepare infrastructure for AI integrations and potential public API.
 
 ## Technical Considerations
 
+### Strategy Detection Engine
+- **Algorithm**: Sliding window clustering (5-minute rolling)
+- **Storage**: Annotate flow records with detected strategy IDs
+- **Streaming**: Real-time pattern matching on incoming flow
+
+### Agent Architecture
+- **Orchestration**: In-house agent framework
+- **LLM**: Claude API (Anthropic)
+- **Function calling**: Structured tool definitions
+- **Memory**: Conversation context per session
+
 ### MCP Server Stack
 - **Runtime**: Cloudflare Workers (existing)
 - **Protocol**: MCP over HTTP/SSE
 - **Auth**: User API keys tied to subscription
 
-### RAG Stack Options
-- **Vector DB**: Cloudflare Vectorize or external (Pinecone)
-- **Embeddings**: OpenAI or local model
-- **LLM**: Claude API (Anthropic)
-- **Framework**: LangChain or custom
-
 ### Frontend Changes
-- New chat/assistant component
+- Chat/assistant component (portable to mobile)
+- Strategy visualization in flow table
 - Command palette integration
-- Onboarding flow components
 
 ---
 
-## Timeline (Rough)
+## Execution Phases
 
-| Phase | Focus | Duration |
-|-------|-------|----------|
-| Phase 1 | MCP server MVP (read-only) | 2-3 weeks |
-| Phase 2 | RAG for portfolio Q&A | 3-4 weeks |
-| Phase 3 | Simplified onboarding | 2 weeks |
-| Phase 4 | MCP write operations + polish | 2 weeks |
+| Phase | Focus |
+|-------|-------|
+| Phase 1 | Multi-leg strategy detection engine (Initiative 1) |
+| Phase 2 | API migration + MCP server (Initiative 2) |
+| Phase 3 | Chat interface with read operations (Initiative 3) |
+| Phase 4 | Chat write operations + action handlers |
+| Phase 5 | Simplified UX & onboarding (Initiative 4) |
 
 ---
 
 ## Out of Scope (This Cycle)
 
-- Mobile app
+- Native mobile apps (see [backlog](./backlog.md#native-mobile-apps) for documented strategy)
 - Broker integrations
 - Multi-language support
 - Social/community features

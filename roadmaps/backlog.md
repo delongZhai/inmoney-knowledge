@@ -208,15 +208,53 @@ Early-stage ideas that need more research or validation.
 
 ---
 
+## Planned Future Initiatives
+
+Major initiatives documented for future development.
+
+### Native Mobile Apps
+**Priority**: Future (after Pillars 1-2 complete)
+**Category**: Mobile
+**Effort**: XL
+
+Native iOS and Android applications with chat-first interface.
+
+**Strategy**:
+- iOS: Swift + SwiftUI
+- Android: Kotlin + Jetpack Compose
+- Shared: Design tokens, API contracts, authentication (Supabase)
+
+**Core Features**:
+- Chat interface as primary interaction (same as web)
+- Watchlist management with real-time updates
+- Push notifications for AI-generated alerts
+- Flow feed with strategy annotations
+- Offline-capable watchlist caching
+
+**Design System Requirements**:
+- Unified color palette, typography, spacing tokens
+- Component library documentation
+- Platform-specific adaptations (iOS HIG, Material Design)
+- Dark mode support
+
+**Dependencies**:
+- Multi-leg strategy detection API (Initiative 1)
+- Conversational interface + agent framework (Initiative 3)
+- API migration complete (compute endpoints)
+
+**Why Wait**:
+- API-first architecture must be complete first
+- Chat interface design needs validation on web before mobile
+- Reduces duplicate implementation by having stable APIs
+
+---
+
 ## Out of Scope / Rejected
 
 Features that have been considered and rejected. Document reasoning.
 
-### Native Mobile Apps
-- **Reason**: PWA approach preferred for faster iteration. Revisit if PWA limitations become blocking.
-
 ### Real-Time Chat Support
-- **Reason**: High operational cost. AI assistant (RAG) should reduce support needs. Email support and documentation preferred for current scale.
+- **Reason**: High operational cost. AI assistant should reduce support needs. Email support and documentation preferred for current scale.
 
 ### Crypto Options
 - **Reason**: Different market structure, data sources, and user base. Focus on US equity options for now.
