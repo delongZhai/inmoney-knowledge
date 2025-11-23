@@ -1,574 +1,752 @@
-# Database
+# Database Schema
 
-Database schema and patterns for InMoney.
+Complete database schema for InMoney, auto-generated from `src/supabase/types_db.ts`.
 
 ## Database Systems
 
-### Supabase PostgreSQL (Primary)
-- User data & authentication
-- Options and option events
-- Market listings and company data
-- Strategies and user content
-- Persistent data
-
-### Cloudflare KV (Cache)
-- Realtime options cache (5-10 min TTL)
-- Rate limiting counters
-- Search indexes
-- Session data
-
-### Cloudflare R2 (Object Storage)
-- Leaderboard JSON snapshots
-- Large data exports
+| System | Purpose |
+|--------|---------|
+| **Supabase PostgreSQL** | Primary database for all persistent data |
+| **Cloudflare KV** | Caching (realtime options, rate limits, search indexes) |
+| **Cloudflare R2** | Object storage (strategy P&L charts, leaderboard snapshots) |
 
 ---
 
-## Core Schema
+## Schema Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           DATABASE SCHEMA MAP                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  CORE ENTITIES                                                               │
+│  ├── symbols              Master ticker reference                           │
+│  ├── stocks               Stock-specific fundamentals                        │
+│  ├── etfs                 ETF-specific data                                  │
+│  └── news                 Market news articles                               │
+│                                                                              │
+│  OPTIONS DATA                                                                │
+│  ├── options              Master option contracts                           │
+│  ├── option_events        Detected unusual activity                         │
+│  ├── option_dailys        Daily option snapshots                            │
+│  ├── unusual_options      Flagged unusual options                           │
+│  └── options_puts_calls_ratio  Put/call ratios by symbol                   │
+│                                                                              │
+│  STRATEGY SYSTEM                                                             │
+│  ├── strategy_definitions Strategy templates (40+ types)                    │
+│  ├── strategies           User/detected strategies                          │
+│  ├── strategy_legs        Individual option legs                            │
+│  ├── strategy_detections  Links to detected option events                   │
+│  ├── strategy_executions  Trade execution records                           │
+│  ├── strategy_alerts      Price/Greeks alerts                               │
+│  └── strategy_performance_snapshots  P&L tracking                           │
+│                                                                              │
+│  USER DATA                                                                   │
+│  ├── users                User profiles                                     │
+│  ├── customers            Stripe customer linkage                           │
+│  ├── subscriptions        Subscription status                               │
+│  ├── positions            User holdings                                     │
+│  ├── holdings             Legacy holdings                                   │
+│  ├── symbols_followed     Watchlist                                         │
+│  ├── symbols_preferred_polling  Priority scanning                           │
+│  ├── user_presets         Saved filters/settings                            │
+│  ├── user_portfolio_targets  Portfolio goals                                │
+│  ├── user_limits          Usage limits                                      │
+│  └── trust_scores         Signal scoring                                    │
+│                                                                              │
+│  MARKET DATA                                                                 │
+│  ├── earning_events       Earnings calendar                                 │
+│  ├── symbol_correlations  Symbol pair correlations                          │
+│  ├── symbol_price_series  Historical prices                                 │
+│  └── ticker_prices        Real-time prices                                  │
+│                                                                              │
+│  AUTOMATION                                                                  │
+│  ├── automations          User automation rules                             │
+│  ├── automation_logs      Automation execution logs                         │
+│  └── cron_jobs            System cron jobs                                  │
+│                                                                              │
+│  BILLING                                                                     │
+│  ├── products             Stripe products                                   │
+│  ├── prices               Stripe prices                                     │
+│  └── subscriptions        User subscriptions                                │
+│                                                                              │
+│  VIEWS                                                                       │
+│  ├── bullish_trades       Bullish unusual options                          │
+│  ├── bearish_trades       Bearish unusual options                          │
+│  ├── extended_unusual_options  Enriched unusual options                    │
+│  └── date_calculations_view  Trading day calculations                      │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Core Tables
 
 ### symbols
+Master table for all tradeable tickers.
 
-Master table for all tradeable symbols.
+| Column | Type | Description |
+|--------|------|-------------|
+| `symbol` | TEXT PK | Ticker symbol (e.g., "AAPL") |
+| `name` | TEXT | Company/ETF name |
+| `type` | TEXT | "Stock" or "ETF" |
+| `exchange` | TEXT | Exchange (NYSE, NASDAQ, etc.) |
+| `currency` | TEXT | Trading currency |
+| `region` | TEXT | Market region |
+| `active` | BOOLEAN | Is actively traded |
+| `created_at` | TIMESTAMPTZ | Record creation |
 
-```sql
-CREATE TABLE symbols (
-  symbol TEXT PRIMARY KEY,
-  company_name TEXT,
-  asset_type TEXT NOT NULL,          -- 'STOCK', 'ETF'
-  exchange TEXT,
-  sector TEXT,
-  industry TEXT,
-  market_cap BIGINT,
-  pe_ratio NUMERIC,
-  peg_ratio NUMERIC,
-  beta NUMERIC,
-  dividend_yield NUMERIC,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
+### stocks
+Stock-specific fundamental data.
 
-CREATE INDEX idx_symbols_asset_type ON symbols(asset_type);
-CREATE INDEX idx_symbols_sector ON symbols(sector);
-CREATE INDEX idx_symbols_market_cap ON symbols(market_cap);
-```
+| Column | Type | Description |
+|--------|------|-------------|
+| `symbol` | TEXT PK FK→symbols | Ticker symbol |
+| `market_capitalization` | BIGINT | Market cap in dollars |
+| `pe_ratio` | NUMERIC | Price-to-earnings ratio |
+| `peg_ratio` | NUMERIC | PEG ratio |
+| `beta` | NUMERIC | Beta coefficient |
+| `sector` | TEXT | Business sector |
+| `industry` | TEXT | Industry classification |
+| `description` | TEXT | Company description |
+| `dividend_yield` | NUMERIC | Dividend yield % |
+| `ex_dividend_date` | DATE | Ex-dividend date |
+| `week_52_high` | NUMERIC | 52-week high |
+| `week_52_low` | NUMERIC | 52-week low |
+| `day_50_moving_average` | NUMERIC | 50-day MA |
+| `day_200_moving_average` | NUMERIC | 200-day MA |
+| `analyst_target_price` | NUMERIC | Analyst target |
+| `analyst_rating_*` | INTEGER | Analyst ratings breakdown |
+| `updated_at` | TIMESTAMPTZ | Last update |
 
-### market_listings
+### etfs
+ETF-specific data.
 
-Available market listings for scanning.
+| Column | Type | Description |
+|--------|------|-------------|
+| `symbol` | TEXT PK FK→symbols | ETF symbol |
+| `net_assets` | BIGINT | Total AUM |
+| `net_expense_ratio` | NUMERIC | Expense ratio |
+| `portfolio_turnover` | NUMERIC | Turnover rate |
+| `dividend_yield` | NUMERIC | Distribution yield |
+| `inception_date` | DATE | Fund inception |
+| `leveraged` | BOOLEAN | Is leveraged ETF |
+| `asset_allocate_to_*` | NUMERIC | Asset allocation % |
+| `updated_at` | TIMESTAMPTZ | Last update |
 
-```sql
-CREATE TABLE market_listings (
-  symbol TEXT PRIMARY KEY REFERENCES symbols(symbol),
-  asset_type TEXT NOT NULL,
-  exchange TEXT,
-  market_cap BIGINT,
-  is_active BOOLEAN DEFAULT TRUE,
-  last_scanned_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
+### etf_holdings_allocations
+ETF holdings breakdown.
 
-CREATE INDEX idx_market_listings_active ON market_listings(is_active);
-CREATE INDEX idx_market_listings_asset_type ON market_listings(asset_type);
-```
+| Column | Type | Description |
+|--------|------|-------------|
+| `etf_symbol` | TEXT FK→etfs | ETF symbol |
+| `symbol` | TEXT FK→symbols | Holding symbol |
+| `weight` | NUMERIC | Weight in portfolio % |
 
-### company_snapshots
+### etf_sectors_allocations
+ETF sector breakdown.
 
-Company fundamental data snapshots.
-
-```sql
-CREATE TABLE company_snapshots (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  symbol TEXT NOT NULL REFERENCES symbols(symbol),
-  snapshot_date DATE NOT NULL,
-  market_cap BIGINT,
-  pe_ratio NUMERIC,
-  peg_ratio NUMERIC,
-  eps NUMERIC,
-  revenue BIGINT,
-  gross_profit BIGINT,
-  ebitda BIGINT,
-  beta NUMERIC,
-  dividend_yield NUMERIC,
-  fifty_two_week_high NUMERIC,
-  fifty_two_week_low NUMERIC,
-  raw_data JSONB,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(symbol, snapshot_date)
-);
-
-CREATE INDEX idx_company_snapshots_symbol ON company_snapshots(symbol);
-CREATE INDEX idx_company_snapshots_date ON company_snapshots(snapshot_date);
-```
-
-### etf_profiles
-
-ETF-specific profile data.
-
-```sql
-CREATE TABLE etf_profiles (
-  symbol TEXT PRIMARY KEY REFERENCES symbols(symbol),
-  etf_name TEXT,
-  asset_class TEXT,
-  expense_ratio NUMERIC,
-  aum BIGINT,
-  inception_date DATE,
-  holdings_count INTEGER,
-  top_holdings JSONB,
-  sector_weights JSONB,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
+| Column | Type | Description |
+|--------|------|-------------|
+| `symbol` | TEXT FK→etfs | ETF symbol |
+| `sector` | TEXT | Sector name |
+| `weight` | NUMERIC | Weight % |
 
 ---
 
-## Options Schema
+## Options Tables
 
 ### options
-
 Master table for option contracts.
 
-```sql
-CREATE TABLE options (
-  option_id TEXT PRIMARY KEY,        -- OCC format: AAPL240119C00150000
-  symbol TEXT NOT NULL REFERENCES symbols(symbol),
-  exp_date DATE NOT NULL,
-  strike NUMERIC NOT NULL,
-  o_type TEXT NOT NULL,              -- 'call' or 'put'
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_options_symbol ON options(symbol);
-CREATE INDEX idx_options_exp_date ON options(exp_date);
-CREATE INDEX idx_options_symbol_exp ON options(symbol, exp_date);
-```
+| Column | Type | Description |
+|--------|------|-------------|
+| `option_id` | TEXT PK | OCC format ID (e.g., "AAPL240119C00150000") |
+| `symbol` | TEXT FK→symbols | Underlying symbol |
+| `exp_date` | DATE | Expiration date |
+| `strike` | NUMERIC | Strike price |
+| `o_type` | TEXT | "call" or "put" |
 
 ### option_events
+Core table for detected unusual options activity.
 
-Individual option activity events (core of Option Flow Engine).
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK | Event ID |
+| `option_id` | TEXT FK→options | Option contract |
+| `event_type` | TEXT | BuyCall, SellCall, BuyPut, SellPut, Askside, Bidside |
+| `volume` | INTEGER | Trade volume |
+| `net_premium_transacted` | NUMERIC | Premium in dollars |
+| `last_price` | NUMERIC | Last traded price |
+| `mark_price` | NUMERIC | Mid-point price |
+| `bid_price` | NUMERIC | Bid price |
+| `ask_price` | NUMERIC | Ask price |
+| `bid_size` | INTEGER | Bid size |
+| `ask_size` | INTEGER | Ask size |
+| `open_int` | INTEGER | Open interest |
+| `last_stock_price` | NUMERIC | Underlying price |
+| `score` | NUMERIC | Unusual score |
+| `elapsed_seconds` | INTEGER | Time since event |
+| `iv` | NUMERIC | Implied volatility |
+| `delta` | NUMERIC | Delta |
+| `gamma` | NUMERIC | Gamma |
+| `theta` | NUMERIC | Theta |
+| `vega` | NUMERIC | Vega |
+| `rho` | NUMERIC | Rho |
+| `date_traded` | DATE | Trade date |
+| `recorded_at` | TIMESTAMPTZ | Detection time |
 
-```sql
-CREATE TABLE option_events (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  option_id TEXT NOT NULL REFERENCES options(option_id),
-  event_type TEXT NOT NULL,          -- BuyCall, SellCall, BuyPut, SellPut, Askside, Bidside
-  volume INTEGER NOT NULL,
-  net_premium_transacted NUMERIC,
-  last_price NUMERIC,
-  mark NUMERIC,
-  bid NUMERIC,
-  ask NUMERIC,
-  bid_size INTEGER,
-  ask_size INTEGER,
-  open_int INTEGER,
-  last_stock_price NUMERIC,
-  score NUMERIC,
-  moneyness NUMERIC,
-  elapsed_seconds INTEGER,
-  -- Greeks
-  iv NUMERIC,
-  delta NUMERIC,
-  gamma NUMERIC,
-  vega NUMERIC,
-  theta NUMERIC,
-  rho NUMERIC,
-  -- Metadata
-  qualification_codes TEXT[],        -- Array of U001-U012 codes
-  recorded_at TIMESTAMPTZ DEFAULT NOW()
-);
+### option_dailys
+Daily option snapshots for historical analysis.
 
-CREATE INDEX idx_option_events_option_id ON option_events(option_id);
-CREATE INDEX idx_option_events_recorded_at ON option_events(recorded_at DESC);
-CREATE INDEX idx_option_events_event_type ON option_events(event_type);
-CREATE INDEX idx_option_events_score ON option_events(score DESC);
-```
+| Column | Type | Description |
+|--------|------|-------------|
+| `option_id` | TEXT FK→options | Option contract |
+| `date_traded` | DATE | Trading date |
+| `last_price` | NUMERIC | Closing price |
+| `volume` | INTEGER | Daily volume |
+| `open_interest` | INTEGER | End-of-day OI |
+| `iv` | TEXT | Implied volatility |
+| `delta` | NUMERIC | Delta |
+| `gamma` | NUMERIC | Gamma |
+| `theta` | NUMERIC | Theta |
+| `vega` | NUMERIC | Vega |
 
-### recent_option_events (Materialized View)
+### unusual_options
+Flagged unusual options (legacy, being replaced by option_events).
 
-Fast access to recent events with joined data.
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK | Record ID |
+| `option_id` | TEXT FK→options | Option contract |
+| `symbol` | TEXT FK→symbols | Underlying symbol |
+| `strike` | NUMERIC | Strike price |
+| `exp_date` | DATE | Expiration |
+| `o_type` | TEXT | call/put |
+| `option_type` | TEXT | Bullish/Bearish classification |
+| `volume` | INTEGER | Volume |
+| `open_int` | INTEGER | Open interest |
+| `vol_oi` | NUMERIC | Volume/OI ratio |
+| `last` | NUMERIC | Last price |
+| `bid` | NUMERIC | Bid |
+| `ask` | NUMERIC | Ask |
+| `mark` | NUMERIC | Mark |
+| `price` | NUMERIC | Stock price |
+| `net_premium_transacted` | NUMERIC | Premium |
+| `delta` | NUMERIC | Delta |
+| `iv` | TEXT | IV |
+| `date_traded` | DATE | Trade date |
+| `time_traded` | TIME | Trade time |
 
-```sql
-CREATE MATERIALIZED VIEW recent_option_events AS
-SELECT
-  oe.id,
-  oe.option_id,
-  oe.event_type,
-  oe.volume,
-  oe.net_premium_transacted,
-  oe.last_price,
-  oe.mark,
-  oe.bid,
-  oe.ask,
-  oe.bid_size,
-  oe.ask_size,
-  oe.open_int,
-  oe.last_stock_price,
-  oe.score,
-  oe.moneyness,
-  oe.elapsed_seconds,
-  oe.iv, oe.delta, oe.gamma, oe.vega, oe.theta, oe.rho,
-  oe.qualification_codes,
-  oe.recorded_at,
-  o.symbol,
-  o.exp_date,
-  o.strike,
-  o.o_type,
-  s.company_name,
-  s.market_cap,
-  s.sector,
-  s.pe_ratio,
-  s.beta
-FROM option_events oe
-JOIN options o ON oe.option_id = o.option_id
-JOIN symbols s ON o.symbol = s.symbol
-WHERE oe.recorded_at > NOW() - INTERVAL '24 hours';
+### options_puts_calls_ratio
+Historical put/call ratios by symbol.
 
-CREATE UNIQUE INDEX idx_recent_events_id ON recent_option_events(id);
-CREATE INDEX idx_recent_events_symbol ON recent_option_events(symbol);
-CREATE INDEX idx_recent_events_recorded_at ON recent_option_events(recorded_at DESC);
-CREATE INDEX idx_recent_events_event_type ON recent_option_events(event_type);
-
--- Refresh every 5 minutes via pg_cron or Supabase scheduled function
-```
-
-### unusual_options_leaderboard
-
-Persisted leaderboard snapshots.
-
-```sql
-CREATE TABLE unusual_options_leaderboard (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  symbol TEXT NOT NULL REFERENCES symbols(symbol),
-  asset_type TEXT NOT NULL,
-  total_volume INTEGER,
-  total_premium NUMERIC,
-  call_volume INTEGER,
-  put_volume INTEGER,
-  call_premium NUMERIC,
-  put_premium NUMERIC,
-  bullish_score NUMERIC,
-  bearish_score NUMERIC,
-  snapshot_time TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_leaderboard_symbol ON unusual_options_leaderboard(symbol);
-CREATE INDEX idx_leaderboard_snapshot ON unusual_options_leaderboard(snapshot_time DESC);
-```
-
-### trust_scores
-
-Calculated trust scores for option signals.
-
-```sql
-CREATE TABLE trust_scores (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id),
-  filter_payload JSONB NOT NULL,     -- User's filter criteria
-  score NUMERIC,
-  event_count INTEGER,
-  last_calculated_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_trust_scores_user ON trust_scores(user_id);
-```
+| Column | Type | Description |
+|--------|------|-------------|
+| `symbol` | TEXT FK→symbols | Ticker |
+| `date_traded` | DATE | Trading date |
+| `expiration_date` | DATE | Expiration being tracked |
+| `dte` | INTEGER | Days to expiration |
+| `calls_volume` | INTEGER | Call volume |
+| `puts_volume` | INTEGER | Put volume |
+| `calls_open_interest` | INTEGER | Call OI |
+| `puts_open_interest` | INTEGER | Put OI |
+| `created_at` | TIMESTAMPTZ | Record creation |
 
 ---
 
-## User Schema
+## Strategy System
 
-### profiles (extends auth.users)
+### strategy_definitions
+Pre-defined strategy templates (40+ types).
 
-```sql
-CREATE TABLE profiles (
-  id UUID PRIMARY KEY REFERENCES auth.users(id),
-  email TEXT,
-  display_name TEXT,
-  avatar_url TEXT,
-  subscription_tier TEXT DEFAULT 'free',  -- 'free', 'pro', 'premium'
-  stripe_customer_id TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK | Definition ID |
+| `name` | TEXT | Strategy name (e.g., "Bull Call Spread") |
+| `description` | TEXT | Strategy description |
+| `sentiment` | TEXT | bullish, bearish, neutral |
+| `risk` | TEXT | limited, unlimited |
+| `reward` | TEXT | limited, unlimited |
+| `is_multi_leg` | BOOLEAN | Has multiple legs |
+| `include_stock_leg` | BOOLEAN | Includes stock position |
+| `created_at` | TIMESTAMPTZ | Creation time |
 
-CREATE INDEX idx_profiles_stripe ON profiles(stripe_customer_id);
-```
+### strategies
+User-created or detected strategies.
 
-### stripe_customers
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK | Strategy ID |
+| `user_id` | UUID FK→users | Owner (null if detected) |
+| `strategy_definition_id` | UUID FK→strategy_definitions | Strategy type |
+| `symbol` | TEXT FK→symbols | Underlying |
+| `name` | TEXT | Strategy name |
+| `source` | ENUM | "user", "detected", "imported" |
+| `current_stock_price` | NUMERIC | Entry stock price |
+| `entry_date` | DATE | Entry date |
+| `exit_date` | DATE | Exit date (if closed) |
+| `earliest_exp_date` | DATE | Nearest expiration |
+| `final_exp_date` | DATE | Furthest expiration |
+| `size` | INTEGER | Position size |
+| `is_debit` | BOOLEAN | Net debit position |
+| `net_premium` | NUMERIC | Net premium paid/received |
+| `total_premium_paid` | NUMERIC | Total paid |
+| `total_premium_received` | NUMERIC | Total received |
+| `max_expected_profit` | NUMERIC | Max profit |
+| `max_expected_loss` | NUMERIC | Max loss |
+| `realized_pnl` | NUMERIC | Realized P&L |
+| `unrealized_pnl` | NUMERIC | Unrealized P&L |
+| `detection_confidence` | NUMERIC | Detection confidence |
+| `r2_object_key` | TEXT | R2 key for P&L chart |
+| `created_at` | TIMESTAMPTZ | Creation time |
 
+### strategy_legs
+Individual legs of a strategy.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK | Leg ID |
+| `strategy_id` | UUID FK→strategies | Parent strategy |
+| `option_id` | TEXT FK→options | Option contract |
+| `option_event_id` | UUID FK→option_events | Detected event |
+| `symbol` | TEXT FK→symbols | Underlying |
+| `instrument_type` | ENUM | "option", "stock" |
+| `action` | ENUM | "buy", "sell" |
+| `leg_position` | TEXT | Position label |
+| `size` | INTEGER | Contracts |
+| `lot_size` | INTEGER | Multiplier (100) |
+| `stock_quantity` | INTEGER | Stock shares (if stock leg) |
+| `stock_price` | NUMERIC | Stock price |
+| `last_price` | NUMERIC | Option price |
+| `mark_price` | NUMERIC | Mark price |
+| `bid_price` | NUMERIC | Bid |
+| `ask_price` | NUMERIC | Ask |
+| `bid_size` | INTEGER | Bid size |
+| `ask_size` | INTEGER | Ask size |
+| `volume` | INTEGER | Volume |
+| `open_int` | INTEGER | Open interest |
+| `iv` | NUMERIC | IV |
+| `delta` | NUMERIC | Delta |
+| `gamma` | NUMERIC | Gamma |
+| `theta` | NUMERIC | Theta |
+| `vega` | NUMERIC | Vega |
+| `rho` | NUMERIC | Rho |
+| `created_at` | TIMESTAMPTZ | Creation time |
+
+### strategy_detections
+Links detected strategies to option events.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK | Detection ID |
+| `strategy_id` | UUID FK→strategies | Strategy |
+| `option_event_id` | UUID FK→option_events | Event |
+| `created_at` | TIMESTAMPTZ | Detection time |
+
+### strategy_executions
+Trade execution records.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK | Execution ID |
+| `strategy_id` | UUID FK→strategies | Strategy |
+| `user_id` | UUID FK→users | User |
+| `execution_type` | ENUM | "open", "close", "roll" |
+| `executed_at` | TIMESTAMPTZ | Execution time |
+| `quantity` | INTEGER | Quantity |
+| `execution_price` | NUMERIC | Fill price |
+| `commission_paid` | NUMERIC | Commission |
+| `account_id` | TEXT | Brokerage account |
+| `brokerage_order_id` | TEXT | Order ID |
+| `position_ids` | TEXT[] | Linked positions |
+| `notes` | TEXT | Execution notes |
+| `created_at` | TIMESTAMPTZ | Record creation |
+
+### strategy_alerts
+Price and Greeks alerts.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK | Alert ID |
+| `strategy_id` | UUID FK→strategies | Strategy |
+| `user_id` | UUID FK→users | User |
+| `alert_type` | TEXT | Alert type |
+| `message` | TEXT | Alert message |
+| `trigger_condition` | JSONB | Trigger rules |
+| `threshold_value` | NUMERIC | Threshold |
+| `current_value` | NUMERIC | Current value |
+| `is_active` | BOOLEAN | Is active |
+| `triggered_at` | TIMESTAMPTZ | Trigger time |
+| `acknowledged_at` | TIMESTAMPTZ | Acknowledgment |
+| `created_at` | TIMESTAMPTZ | Creation time |
+
+### strategy_performance_snapshots
+Daily P&L tracking.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK | Snapshot ID |
+| `execution_id` | UUID FK→strategy_executions | Execution |
+| `user_id` | UUID FK→users | User |
+| `snapshot_date` | DATE | Snapshot date |
+| `current_value` | NUMERIC | Position value |
+| `realized_pnl` | NUMERIC | Realized P&L |
+| `unrealized_pnl` | NUMERIC | Unrealized P&L |
+| `total_return_pct` | NUMERIC | Return % |
+| `underlying_price` | NUMERIC | Stock price |
+| `implied_volatility` | NUMERIC | IV |
+| `total_delta` | NUMERIC | Position delta |
+| `total_gamma` | NUMERIC | Position gamma |
+| `total_theta` | NUMERIC | Position theta |
+| `total_vega` | NUMERIC | Position vega |
+| `days_in_trade` | INTEGER | Days held |
+| `max_profit_reached` | NUMERIC | High water mark |
+| `max_loss_reached` | NUMERIC | Low water mark |
+| `created_at` | TIMESTAMPTZ | Creation time |
+
+---
+
+## User Tables
+
+### users
+User profiles (extends Supabase auth.users).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK | User ID (from auth.users) |
+| `full_name` | TEXT | Display name |
+| `avatar_url` | TEXT | Profile image |
+| `billing_address` | JSONB | Billing info |
+| `payment_method` | JSONB | Payment details |
+
+### customers
 Stripe customer linkage.
 
-```sql
-CREATE TABLE stripe_customers (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES auth.users(id),
-  stripe_customer_id TEXT NOT NULL UNIQUE,
-  subscription_status TEXT,          -- 'active', 'canceled', 'past_due'
-  subscription_id TEXT,
-  current_period_end TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK FK→users | User ID |
+| `stripe_customer_id` | TEXT | Stripe customer ID |
+| `product_id` | TEXT | Current product |
+| `price_id` | TEXT | Current price |
 
-CREATE INDEX idx_stripe_customers_user ON stripe_customers(user_id);
-CREATE INDEX idx_stripe_customers_stripe ON stripe_customers(stripe_customer_id);
-```
+### subscriptions
+Subscription status.
 
-### user_watchlists
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | TEXT PK | Stripe subscription ID |
+| `user_id` | UUID FK→users | User |
+| `status` | ENUM | active, canceled, past_due, etc. |
+| `price_id` | TEXT FK→prices | Price |
+| `quantity` | INTEGER | Quantity |
+| `current_period_start` | TIMESTAMPTZ | Period start |
+| `current_period_end` | TIMESTAMPTZ | Period end |
+| `cancel_at_period_end` | BOOLEAN | Will cancel |
+| `cancel_at` | TIMESTAMPTZ | Cancel date |
+| `canceled_at` | TIMESTAMPTZ | Cancellation date |
+| `ended_at` | TIMESTAMPTZ | End date |
+| `trial_start` | TIMESTAMPTZ | Trial start |
+| `trial_end` | TIMESTAMPTZ | Trial end |
+| `metadata` | JSONB | Metadata |
+| `livemode` | BOOLEAN | Live mode |
+| `created` | TIMESTAMPTZ | Creation time |
 
-User's watched symbols.
+### positions
+User portfolio positions.
 
-```sql
-CREATE TABLE user_watchlists (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES auth.users(id),
-  name TEXT NOT NULL DEFAULT 'Default',
-  symbols TEXT[] DEFAULT '{}',
-  is_default BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK | Position ID |
+| `user_id` | UUID FK→users | User |
+| `symbol` | TEXT FK→symbols | Symbol |
+| `option_id` | TEXT FK→options | Option (if option) |
+| `brokerage` | TEXT | Brokerage name |
+| `quantity` | INTEGER | Quantity |
+| `average_price` | NUMERIC | Avg cost |
+| `realized_profit_loss` | NUMERIC | Realized P&L |
+| `unrealized_profit_loss` | NUMERIC | Unrealized P&L |
+| `closed` | BOOLEAN | Is closed |
+| `closed_at` | TIMESTAMPTZ | Close date |
+| `payload` | JSONB | Additional data |
+| `created_at` | TIMESTAMPTZ | Creation time |
+| `updated_at` | TIMESTAMPTZ | Last update |
 
-CREATE INDEX idx_watchlists_user ON user_watchlists(user_id);
-```
+### symbols_followed
+User watchlist.
 
-### user_preferences
+| Column | Type | Description |
+|--------|------|-------------|
+| `user_id` | UUID FK→users | User |
+| `symbol` | TEXT FK→symbols | Symbol |
+| `followed` | BOOLEAN | Is following |
+| `created_at` | TIMESTAMPTZ | Creation time |
 
-User settings and preferences.
+### symbols_preferred_polling
+Priority symbols for scanning.
 
-```sql
-CREATE TABLE user_preferences (
-  user_id UUID PRIMARY KEY REFERENCES auth.users(id),
-  theme TEXT DEFAULT 'system',
-  notifications_enabled BOOLEAN DEFAULT TRUE,
-  email_notifications BOOLEAN DEFAULT TRUE,
-  default_filters JSONB,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER PK | Record ID |
+| `user_id` | UUID FK→users | User |
+| `symbol` | TEXT FK→symbols | Symbol |
+| `created_at` | TIMESTAMPTZ | Creation time |
 
----
+### user_presets
+Saved filter presets.
 
-## Market Data Schema
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER PK | Preset ID |
+| `user_id` | UUID FK→users | User |
+| `key` | TEXT | Preset category |
+| `preset_name` | TEXT | Display name |
+| `value` | JSONB | Preset data |
+| `selected` | BOOLEAN | Is active |
+| `last_updated` | TIMESTAMPTZ | Last update |
 
-### earnings
+### user_portfolio_targets
+Portfolio goals and constraints.
 
-Upcoming earnings calendar.
+| Column | Type | Description |
+|--------|------|-------------|
+| `user_id` | UUID PK FK→users | User |
+| `account_type` | TEXT | margin, cash, etc. |
+| `buying_power` | NUMERIC | Available BP |
+| `cash` | NUMERIC | Cash balance |
+| `margin` | NUMERIC | Margin used |
+| `max_margin` | NUMERIC | Max margin |
+| `max_buy_power` | NUMERIC | Max BP |
+| `max_loss` | NUMERIC | Max loss limit |
+| `expected_return` | NUMERIC | Target return |
+| `net_liquidation_value` | NUMERIC | NLV |
+| `excess_liquidity` | NUMERIC | Excess liquidity |
+| `created_at` | TIMESTAMPTZ | Creation time |
 
-```sql
-CREATE TABLE earnings (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  symbol TEXT NOT NULL REFERENCES symbols(symbol),
-  report_date DATE NOT NULL,
-  fiscal_quarter TEXT,
-  estimate_eps NUMERIC,
-  actual_eps NUMERIC,
-  estimate_revenue BIGINT,
-  actual_revenue BIGINT,
-  report_time TEXT,                  -- 'BMO' (before), 'AMC' (after), 'DMH' (during)
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(symbol, report_date)
-);
+### trust_scores
+Signal scoring results.
 
-CREATE INDEX idx_earnings_date ON earnings(report_date);
-CREATE INDEX idx_earnings_symbol ON earnings(symbol);
-```
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK | Score ID |
+| `user_id` | UUID FK→users | User |
+| `filter_id` | INTEGER FK→user_presets | Filter preset |
+| `payload` | TEXT | Filter criteria |
+| `digest` | JSONB | Score results |
+| `workflow_id` | TEXT | Workflow instance |
+| `scheduled_at` | TIMESTAMPTZ | Schedule time |
+| `time_completed` | TIMESTAMPTZ | Completion time |
+| `created_at` | TIMESTAMPTZ | Creation time |
 
----
+### trust_score_events
+Events linked to trust scores.
 
-## Row Level Security (RLS)
-
-### User Data Policies
-
-```sql
--- Enable RLS on user tables
-ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE user_watchlists ENABLE ROW LEVEL SECURITY;
-ALTER TABLE user_preferences ENABLE ROW LEVEL SECURITY;
-ALTER TABLE trust_scores ENABLE ROW LEVEL SECURITY;
-
--- Profiles: Users can only access their own profile
-CREATE POLICY "Users can view own profile"
-  ON profiles FOR SELECT
-  USING (auth.uid() = id);
-
-CREATE POLICY "Users can update own profile"
-  ON profiles FOR UPDATE
-  USING (auth.uid() = id);
-
--- Watchlists: Users can only access their own watchlists
-CREATE POLICY "Users can view own watchlists"
-  ON user_watchlists FOR SELECT
-  USING (auth.uid() = user_id);
-
-CREATE POLICY "Users can insert own watchlists"
-  ON user_watchlists FOR INSERT
-  WITH CHECK (auth.uid() = user_id);
-
-CREATE POLICY "Users can update own watchlists"
-  ON user_watchlists FOR UPDATE
-  USING (auth.uid() = user_id);
-
-CREATE POLICY "Users can delete own watchlists"
-  ON user_watchlists FOR DELETE
-  USING (auth.uid() = user_id);
-```
-
-### Public Data Policies
-
-```sql
--- Market data is publicly readable
-ALTER TABLE symbols ENABLE ROW LEVEL SECURITY;
-ALTER TABLE options ENABLE ROW LEVEL SECURITY;
-ALTER TABLE option_events ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Symbols are publicly readable"
-  ON symbols FOR SELECT TO authenticated
-  USING (true);
-
-CREATE POLICY "Options are publicly readable"
-  ON options FOR SELECT TO authenticated
-  USING (true);
-
-CREATE POLICY "Option events are publicly readable"
-  ON option_events FOR SELECT TO authenticated
-  USING (true);
-```
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK | Event ID |
+| `trust_score_id` | UUID FK→trust_scores | Trust score |
+| `payload` | JSONB | Event data |
+| `created_at` | TIMESTAMPTZ | Creation time |
 
 ---
 
-## Query Patterns
+## Market Data Tables
 
-### Using Supabase Client (from Workers)
+### earning_events
+Earnings calendar.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER PK | Event ID |
+| `symbol` | TEXT FK→symbols | Symbol |
+| `earning_date` | DATE | Report date |
+| `time` | TEXT | BMO, AMC, DMH |
+| `eps_forecast` | NUMERIC | EPS estimate |
+| `no_of_ests` | INTEGER | Number of estimates |
+| `market_cap` | BIGINT | Market cap |
+| `name` | TEXT | Company name |
+
+### news
+Market news articles.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK | Article ID |
+| `title` | TEXT | Headline |
+| `url` | TEXT | Article URL |
+| `summary` | TEXT | Summary |
+| `source` | TEXT | News source |
+| `source_domain` | TEXT | Domain |
+| `banner_image` | TEXT | Image URL |
+| `authors` | TEXT[] | Authors |
+| `time_published` | TIMESTAMPTZ | Publish time |
+| `overall_sentiment_score` | NUMERIC | Sentiment score |
+| `overall_sentiment_label` | TEXT | Sentiment label |
+| `ticker_sentiment` | JSONB | Per-ticker sentiment |
+| `topics` | JSONB | Topics |
+| `category_within_source` | TEXT | Category |
+| `created_at` | TIMESTAMPTZ | Import time |
+| `updated_at` | TIMESTAMPTZ | Last update |
+
+### symbol_news
+Many-to-many news to symbols.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `news_id` | UUID FK→news | Article |
+| `symbol` | TEXT FK→symbols | Symbol |
+
+### symbol_correlations
+Symbol pair correlations.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `symbol_pair` | TEXT PK | "AAPL-MSFT" format |
+| `symbol1` | TEXT FK→symbols | First symbol |
+| `symbol2` | TEXT FK→symbols | Second symbol |
+| `pearson_correlation` | NUMERIC | Pearson coefficient |
+| `spearman_correlation` | NUMERIC | Spearman coefficient |
+| `kendall_correlation` | NUMERIC | Kendall coefficient |
+| `created_at` | TIMESTAMPTZ | Creation time |
+| `updated_at` | TIMESTAMPTZ | Last update |
+
+### symbol_price_series
+Historical price data.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER PK | Series ID |
+| `symbol` | TEXT FK→symbols | Symbol |
+| `data` | JSONB | Price array |
+| `last_updated` | TIMESTAMPTZ | Last update |
+
+### ticker_prices
+Real-time price snapshots.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `stock_symbol` | TEXT FK→symbols | Stock symbol |
+| `option_symbol` | TEXT FK→options | Option symbol |
+| `instrument` | ENUM | "stock", "option" |
+| `price` | NUMERIC | Current price |
+| `payload` | JSONB | Full quote data |
+| `at_when` | TIMESTAMPTZ | Quote time |
+
+---
+
+## Billing Tables
+
+### products
+Stripe products.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | TEXT PK | Stripe product ID |
+| `name` | TEXT | Product name |
+| `description` | TEXT | Description |
+| `image` | TEXT | Image URL |
+| `active` | BOOLEAN | Is active |
+| `metadata` | JSONB | Metadata |
+| `livemode` | BOOLEAN | Live mode |
+
+### prices
+Stripe prices.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | TEXT PK | Stripe price ID |
+| `product_id` | TEXT FK→products | Product |
+| `type` | ENUM | "one_time", "recurring" |
+| `unit_amount` | INTEGER | Price in cents |
+| `currency` | TEXT | Currency code |
+| `interval` | ENUM | day, week, month, year |
+| `interval_count` | INTEGER | Interval count |
+| `trial_period_days` | INTEGER | Trial days |
+| `active` | BOOLEAN | Is active |
+| `description` | TEXT | Description |
+| `metadata` | JSONB | Metadata |
+| `livemode` | BOOLEAN | Live mode |
+
+---
+
+## Views
+
+### bullish_trades
+Filtered view of bullish unusual options.
+
+### bearish_trades
+Filtered view of bearish unusual options.
+
+### extended_unusual_options
+Enriched unusual options with direction and category.
+
+### date_calculations_view
+Trading day calculations (most recent trading day, week start, etc.)
+
+---
+
+## Enums
 
 ```typescript
-import { getSupabaseAdmin } from '../configs';
-
-// Select with joins
-const { data, error } = await getSupabaseAdmin(env)
-  .from('recent_option_events')
-  .select('*')
-  .eq('symbol', 'AAPL')
-  .gte('recorded_at', new Date(Date.now() - 3600000).toISOString())
-  .order('score', { ascending: false })
-  .limit(50);
-
-// Upsert options
-await getSupabaseAdmin(env)
-  .from('options')
-  .upsert(records, { onConflict: 'option_id' });
-
-// Insert events
-await getSupabaseAdmin(env)
-  .from('option_events')
-  .insert(events);
-
-// Complex filtering
-const { data } = await getSupabaseAdmin(env)
-  .from('recent_option_events')
-  .select('*')
-  .in('event_type', ['BuyCall', 'SellPut'])
-  .gte('net_premium_transacted', 50000)
-  .gte('volume', 100)
-  .order('recorded_at', { ascending: false });
+type automation_status = "pending" | "completed" | "failed"
+type automation_trigger = "schedule" | "price" | "event"
+type automation_type = "alert" | "trade"
+type execution_type = "open" | "close" | "roll" | "adjust"
+type function_type = "sma" | "ema" | "rsi" | "macd" | "custom"
+type instrument_type = "stock" | "option"
+type pricing_plan_interval = "day" | "week" | "month" | "year"
+type pricing_type = "one_time" | "recurring"
+type serie_type = "technical" | "fundamental" | "custom"
+type strategy_source = "user" | "detected" | "imported"
+type subscription_status = "trialing" | "active" | "canceled" | "incomplete" | "incomplete_expired" | "past_due" | "unpaid" | "paused"
+type trade_action = "buy" | "sell"
 ```
 
-### Option Events Query Builder
+---
 
-```typescript
-// src/utils/option-events-filter-handler.ts
-export function buildOptionEventsQuery(
-  client: SupabaseClient,
-  filters: OptionEventFilters
-) {
-  let query = client.from('recent_option_events').select('*');
+## Key Relationships
 
-  if (filters.symbols?.length) {
-    query = query.in('symbol', filters.symbols);
-  }
-  if (filters.eventTypes?.length) {
-    query = query.in('event_type', filters.eventTypes);
-  }
-  if (filters.minPremium) {
-    query = query.gte('net_premium_transacted', filters.minPremium);
-  }
-  if (filters.minVolume) {
-    query = query.gte('volume', filters.minVolume);
-  }
-  if (filters.minMoneyness) {
-    query = query.gte('moneyness', filters.minMoneyness);
-  }
-  if (filters.maxMoneyness) {
-    query = query.lte('moneyness', filters.maxMoneyness);
-  }
+```
+symbols (1) ──────< (M) stocks
+symbols (1) ──────< (M) etfs
+symbols (1) ──────< (M) options
+symbols (1) ──────< (M) strategies
+symbols (1) ──────< (M) positions
+symbols (1) ──────< (M) symbols_followed
+symbols (1) ──────< (M) earning_events
 
-  return query.order('recorded_at', { ascending: false });
-}
+options (1) ──────< (M) option_events
+options (1) ──────< (M) option_dailys
+options (1) ──────< (M) unusual_options
+options (1) ──────< (M) strategy_legs
+
+strategies (1) ──────< (M) strategy_legs
+strategies (1) ──────< (M) strategy_detections
+strategies (1) ──────< (M) strategy_executions
+strategies (1) ──────< (M) strategy_alerts
+
+users (1) ──────< (M) positions
+users (1) ──────< (M) strategies
+users (1) ──────< (M) symbols_followed
+users (1) ──────< (M) user_presets
+users (1) ──────< (1) customers
+users (1) ──────< (M) subscriptions
 ```
 
 ---
 
 ## Migrations
 
-### Location
-`supabase/migrations/`
-
-### Commands
+**Location**: `supabase/migrations/`
 
 ```bash
-# Create new migration
-supabase migration new add_qualification_codes
+# Create migration
+supabase migration new add_new_table
 
-# Apply migrations locally
+# Apply locally
 supabase db push
 
-# Apply to production
-supabase db push --linked
-
-# Generate types from schema
+# Generate types
 supabase gen types typescript --linked > src/supabase/types_db.ts
-```
-
-### Migration Naming Convention
-```
-YYYYMMDDHHMMSS_description.sql
-```
-
-Example:
-```
-20241115120000_add_option_events_table.sql
-20241116090000_add_qualification_codes_column.sql
-20241117150000_create_recent_events_view.sql
-```
-
----
-
-## Performance Optimization
-
-### Indexes
-- Primary keys on all tables
-- Foreign key indexes for joins
-- Composite indexes for common query patterns
-- Partial indexes for filtered queries
-
-### Materialized Views
-- `recent_option_events`: Refreshed every 5 minutes
-- Pre-joined data for fast API responses
-
-### Caching Strategy
-- KV cache for realtime options (5-10 min TTL)
-- Edge caching for leaderboard data
-- Client-side caching in Angular
-
-### Partitioning (Future)
-```sql
--- Consider partitioning option_events by month for scale
-CREATE TABLE option_events (
-  ...
-) PARTITION BY RANGE (recorded_at);
-
-CREATE TABLE option_events_2024_11 PARTITION OF option_events
-  FOR VALUES FROM ('2024-11-01') TO ('2024-12-01');
 ```
